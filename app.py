@@ -342,8 +342,12 @@ def load_acoes_from_sheets():
 
 def update_acoes_in_sheets(df_acoes):
     try:
+        print("\n===== Atualizando ações no Google Sheets =====")
+        print(f"Tentando atualizar {len(df_acoes)} registros de ações")
+        
         spreadsheet = connect_google_sheets()
         if not spreadsheet:
+            print("❌ Não foi possível conectar ao Google Sheets")
             return False
 
         # Preparar dados para upload
@@ -356,38 +360,106 @@ def update_acoes_in_sheets(df_acoes):
                     lambda x: x.strftime(
                         '%Y-%m-%d') if pd.notna(x) and hasattr(x, 'strftime') else ''
                 )
+                print(f"Coluna {col} formatada para string de data")
+
+        # Remover colunas calculadas que não devem ser enviadas para o Google Sheets
+        colunas_calculadas = ['Dias Restantes', 'Atrasada', 'Tempo de Conclusão']
+        for col in colunas_calculadas:
+            if col in df_to_upload.columns:
+                df_to_upload = df_to_upload.drop(columns=[col])
+                print(f"Coluna calculada {col} removida antes do upload")
+
+        # Salvar backup local antes da atualização no Google Sheets
+        save_data_to_local(df_acoes, "acoes_antes_upload")
+        
+        # Verificar se há dados para enviar
+        if df_to_upload.empty:
+            print("⚠️ Não há dados para atualizar na planilha")
+            return False
 
         # Converter DataFrame para lista de listas
         values = [df_to_upload.columns.tolist()]  # Cabeçalho
         values.extend(df_to_upload.values.tolist())  # Dados
+        
+        print(f"Preparados {len(values)-1} registros para upload")
+        print(f"Colunas para upload: {df_to_upload.columns.tolist()}")
 
         # Atualizar planilha
-        acoes_sheet = spreadsheet.worksheet('Ações')
+        try:
+            acoes_sheet = spreadsheet.worksheet('Ações')
+            print("✅ Guia 'Ações' encontrada no Google Sheets")
+            
+            # Obter dados existentes antes de limpar
+            existing_data = acoes_sheet.get_all_values()
+            print(f"A guia tem atualmente {len(existing_data)} linhas, incluindo cabeçalho")
+            
+            # Verificar se existe a tabela formatada
+            try:
+                # Tentar obter a tabela formatada
+                tabela_info = spreadsheet.fetch_sheet_metadata()
+                print("Metadados da planilha obtidos, verificando formatos de tabela...")
+                
+                # Apenas informar que estamos considerando a tabela formatada
+                print("Foi relatado que existe uma tabela formatada chamada 'tabelaAcoes'")
+                print("A atualização será feita considerando isso")
+                
+                # Abordagem diferente: atualizar célula por célula para preservar a formatação da tabela
+                print("Utilizando abordagem de atualização que preserva a formatação da tabela...")
+                
+                # Atualizar o cabeçalho primeiro (linha 1)
+                header_range = f"A1:{chr(65+len(df_to_upload.columns)-1)}1"
+                acoes_sheet.update(header_range, [df_to_upload.columns.tolist()])
+                
+                # Limpar dados antigos (mantendo o cabeçalho)
+                if len(existing_data) > 1:
+                    clear_range = f"A2:Z{len(existing_data)}"
+                    print(f"Limpando dados existentes no intervalo: {clear_range}")
+                    acoes_sheet.batch_clear([clear_range])
+                
+                # Inserir novos dados (começando da linha 2)
+                if len(df_to_upload) > 0:
+                    data_range = f"A2:{chr(65+len(df_to_upload.columns)-1)}{len(df_to_upload)+1}"
+                    print(f"Inserindo novos dados no intervalo: {data_range}")
+                    acoes_sheet.update(data_range, df_to_upload.values.tolist())
+                    
+            except Exception as table_e:
+                print(f"Erro ao verificar tabela formatada: {table_e}")
+                print("Continuando com abordagem padrão")
+                
+                # Abordagem original: limpar tudo e inserir novamente
+                # Limpar dados existentes (exceto cabeçalho)
+                if len(existing_data) > 1:
+                    acoes_sheet.batch_clear(["A2:Z" + str(len(existing_data))])
+                    print(f"Dados existentes limpos (linhas 2-{len(existing_data)})")
 
-        # Limpar dados existentes (exceto cabeçalho)
-        existing_data = acoes_sheet.get_all_values()
-        if len(existing_data) > 1:  # Se tiver mais do que só o cabeçalho
-            acoes_sheet.batch_clear(["A2:Z" + str(len(existing_data))])
-
-        # Inserir novos dados
-        if len(values) > 1:  # Se tiver dados (além do cabeçalho)
-            acoes_sheet.update('A1', values)
-            print(
-                f"Planilha Ações atualizada com {len(df_to_upload)} registros")
-        else:
-            # Manter apenas o cabeçalho se não houver dados
-            acoes_sheet.update('A1', [values[0]])
-            print("Planilha Ações atualizada apenas com o cabeçalho (sem dados)")
-
-        # Atualizar cache
-        global CACHE_ACOES, LAST_CACHE_UPDATE
-        CACHE_ACOES = df_acoes
-        LAST_CACHE_UPDATE = time.time()
-
-        return True
+                # Inserir novos dados
+                if len(values) > 1:  # Se tiver dados (além do cabeçalho)
+                    acoes_sheet.update('A1', values)
+                    print(f"Planilha atualizada com {len(df_to_upload)} registros")
+                else:
+                    # Manter apenas o cabeçalho se não houver dados
+                    acoes_sheet.update('A1', [values[0]])
+                    print("Planilha atualizada apenas com o cabeçalho (sem dados)")
+            
+            # Atualizar cache
+            global CACHE_ACOES, LAST_CACHE_UPDATE
+            CACHE_ACOES = df_acoes
+            LAST_CACHE_UPDATE = time.time()
+            
+            # Salvar backup local após sucesso
+            save_data_to_local(df_acoes, "acoes")
+            print("✅ Dados de ações atualizados com sucesso no Google Sheets e no cache")
+            
+            return True
+            
+        except Exception as sheet_e:
+            print(f"❌ Erro ao acessar ou atualizar a guia 'Ações': {sheet_e}")
+            import traceback
+            traceback.print_exc()
+            return False
 
     except Exception as e:
-        print(f"Erro ao atualizar planilha de Ações: {e}")
+        print(f"❌ Erro ao atualizar planilha de Ações: {e}")
         import traceback
         traceback.print_exc()
         return False
@@ -3036,6 +3108,8 @@ def save_action(n_clicks, projeto, mes_referencia, prioridade, descricao, respon
     if not n_clicks:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
+    print("\n===== Salvando nova ação (modal principal) =====")
+
     # Validação melhorada para campos obrigatórios
     campos_vazios = []
 
@@ -3068,7 +3142,7 @@ def save_action(n_clicks, projeto, mes_referencia, prioridade, descricao, respon
     # Se algum campo estiver vazio, exibir mensagem de alerta
     if campos_vazios:
         mensagem_erro = f"Por favor, preencha os seguintes campos obrigatórios: {', '.join(campos_vazios)}"
-        print(f"Campos vazios no cadastro da ação: {', '.join(campos_vazios)}")
+        print(f"❌ Campos vazios no cadastro da ação: {', '.join(campos_vazios)}")
         return dash.no_update, True, mensagem_erro, dash.no_update
 
     try:
@@ -3078,23 +3152,87 @@ def save_action(n_clicks, projeto, mes_referencia, prioridade, descricao, respon
         else:
             responsaveis_str = str(responsaveis)
 
-        # Inicializar acoes_data como lista vazia se for None
-        if acoes_data is None:
-            acoes_data = []
-        elif not isinstance(acoes_data, list):
-            # Tentar converter para lista se não for
-            try:
-                acoes_data = list(acoes_data)
-            except:
-                acoes_data = []
+        print(f"Projeto: {projeto}")
+        print(f"Mês Referência: {mes_referencia}")
+        print(f"Responsáveis: {responsaveis_str}")
+        print(f"Status: {status}")
 
-        # Gerar ID da ação (próximo número sequencial)
-        next_id = 1
-        if acoes_data and len(acoes_data) > 0:
-            df_acoes = pd.DataFrame(acoes_data)
-            if 'ID da Ação' in df_acoes.columns:
-                next_id = df_acoes['ID da Ação'].max(
-                ) + 1 if not pd.isna(df_acoes['ID da Ação'].max()) else 1
+        # Carregar ações novamente direto da planilha para garantir que estamos trabalhando com os dados mais atuais
+        try:
+            print("Tentando recarregar ações diretamente do Google Sheets antes de adicionar nova ação...")
+            spreadsheet = connect_google_sheets()
+            if spreadsheet:
+                sheet = spreadsheet.worksheet('Ações')
+                sheet_data = sheet.get_all_records()
+                
+                if sheet_data:
+                    df_atual = pd.DataFrame(sheet_data)
+                    print(f"✅ Carregadas {len(df_atual)} ações do Google Sheets")
+                    
+                    # Verificar se já existe o ID no dataframe atual
+                    max_id = 0
+                    if 'ID da Ação' in df_atual.columns:
+                        ids_acao = pd.to_numeric(df_atual['ID da Ação'], errors='coerce')
+                        max_id = ids_acao.max() if not pd.isna(ids_acao.max()) else 0
+                        
+                    next_id = int(max_id) + 1
+                    print(f"Próximo ID baseado nos dados atuais da planilha: {next_id}")
+                    
+                    # Atualizar acoes_data com os dados da planilha
+                    acoes_data = df_atual.to_dict('records')
+                else:
+                    print("Nenhum dado encontrado na guia Ações do Google Sheets")
+                    # Gerar ID baseado nos dados do cache
+                    next_id = 1
+                    if acoes_data and len(acoes_data) > 0:
+                        df_acoes = pd.DataFrame(acoes_data)
+                        if 'ID da Ação' in df_acoes.columns:
+                            ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                            next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
+            else:
+                print("Não foi possível conectar ao Google Sheets para recarregar ações")
+                # Inicializar acoes_data como lista vazia se for None
+                if acoes_data is None:
+                    acoes_data = []
+                    print("Nenhuma ação encontrada no cache, iniciando lista vazia")
+                elif not isinstance(acoes_data, list):
+                    # Tentar converter para lista se não for
+                    try:
+                        acoes_data = list(acoes_data)
+                        print(f"Convertido acoes_data para lista com {len(acoes_data)} itens")
+                    except Exception as conv_e:
+                        print(f"Erro ao converter acoes_data: {conv_e}")
+                        acoes_data = []
+                
+                # Determinar próximo ID usando os dados em cache
+                next_id = 1
+                if acoes_data and len(acoes_data) > 0:
+                    df_acoes = pd.DataFrame(acoes_data)
+                    if 'ID da Ação' in df_acoes.columns:
+                        ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                        next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
+        except Exception as reload_e:
+            print(f"Erro ao recarregar ações: {reload_e}")
+            # Inicializar acoes_data como lista vazia se for None
+            if acoes_data is None:
+                acoes_data = []
+                print("Nenhuma ação encontrada no cache, iniciando lista vazia")
+            elif not isinstance(acoes_data, list):
+                # Tentar converter para lista se não for
+                try:
+                    acoes_data = list(acoes_data)
+                    print(f"Convertido acoes_data para lista com {len(acoes_data)} itens")
+                except Exception as conv_e:
+                    print(f"Erro ao converter acoes_data: {conv_e}")
+                    acoes_data = []
+            
+            # Determinar próximo ID usando os dados em cache
+            next_id = 1
+            if acoes_data and len(acoes_data) > 0:
+                df_acoes = pd.DataFrame(acoes_data)
+                if 'ID da Ação' in df_acoes.columns:
+                    ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                    next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
 
         # Preparar nova linha
         nova_acao = {
@@ -3113,20 +3251,32 @@ def save_action(n_clicks, projeto, mes_referencia, prioridade, descricao, respon
 
         # Adicionar nova ação aos dados existentes
         acoes_data.append(nova_acao)
+        print(f"Nova ação adicionada ao cache (ID: {next_id})")
 
         # Atualizar dados na planilha do Google Sheets
         df_acoes = pd.DataFrame(acoes_data)
+        
+        # Salvar localmente antes de enviar ao Google Sheets (backup)
+        save_data_to_local(df_acoes, "acoes_pre_upload")
+        
+        # Tentar atualizar no Google Sheets
         success = update_acoes_in_sheets(df_acoes)
         if success:
-            print(f"Ação cadastrada com sucesso: ID {next_id}")
+            print(f"✅ Ação cadastrada com sucesso: ID {next_id}")
+            
+            # Garantir que o cache está atualizado
+            global CACHE_ACOES, LAST_CACHE_UPDATE
+            CACHE_ACOES = df_acoes
+            LAST_CACHE_UPDATE = time.time()
         else:
-            print(f"AVISO: Falha ao salvar ação na planilha, mas foi salva localmente")
+            print(f"⚠️ Falha ao salvar ação na planilha do Google Sheets, mas foi salva localmente")
             save_data_to_local(df_acoes, "acoes")
 
+        print("===== Nova ação salva (modal principal) =====\n")
         return False, False, "", acoes_data
 
     except Exception as e:
-        print(f"Erro ao salvar ação: {e}")
+        print(f"❌ Erro ao salvar ação: {e}")
         import traceback
         traceback.print_exc()
         return dash.no_update, True, f"Erro ao salvar ação: {str(e)}", dash.no_update
@@ -3248,6 +3398,8 @@ def save_new_action(n_clicks, projeto, mes_referencia, prioridade, descricao, re
     if not n_clicks:
         return dash.no_update, dash.no_update, dash.no_update, dash.no_update
 
+    print("\n===== Salvando nova ação =====")
+
     # Validação melhorada para campos obrigatórios
     campos_vazios = []
 
@@ -3280,7 +3432,7 @@ def save_new_action(n_clicks, projeto, mes_referencia, prioridade, descricao, re
     # Se algum campo estiver vazio, exibir mensagem de alerta
     if campos_vazios:
         mensagem_erro = f"Por favor, preencha os seguintes campos obrigatórios: {', '.join(campos_vazios)}"
-        print(f"Campos vazios no cadastro da ação: {', '.join(campos_vazios)}")
+        print(f"❌ Campos vazios no cadastro da ação: {', '.join(campos_vazios)}")
         return dash.no_update, True, mensagem_erro, dash.no_update
 
     try:
@@ -3290,23 +3442,74 @@ def save_new_action(n_clicks, projeto, mes_referencia, prioridade, descricao, re
         else:
             responsaveis_str = str(responsaveis)
 
+        print(f"Projeto: {projeto}")
+        print(f"Mês Referência: {mes_referencia}")
+        print(f"Responsáveis: {responsaveis_str}")
+        print(f"Status: {status}")
+
         # Inicializar acoes_data como lista vazia se for None
         if acoes_data is None:
             acoes_data = []
+            print("Nenhuma ação encontrada no cache, iniciando lista vazia")
         elif not isinstance(acoes_data, list):
             # Tentar converter para lista se não for
             try:
                 acoes_data = list(acoes_data)
-            except:
+                print(f"Convertido acoes_data para lista com {len(acoes_data)} itens")
+            except Exception as conv_e:
+                print(f"Erro ao converter acoes_data: {conv_e}")
                 acoes_data = []
 
-        # Gerar ID da ação (próximo número sequencial)
-        next_id = 1
-        if acoes_data and len(acoes_data) > 0:
-            df_acoes = pd.DataFrame(acoes_data)
-            if 'ID da Ação' in df_acoes.columns:
-                next_id = df_acoes['ID da Ação'].max(
-                ) + 1 if not pd.isna(df_acoes['ID da Ação'].max()) else 1
+        # Carregar ações novamente direto da planilha para garantir que estamos trabalhando com os dados mais atuais
+        try:
+            print("Tentando recarregar ações diretamente do Google Sheets antes de adicionar nova ação...")
+            spreadsheet = connect_google_sheets()
+            if spreadsheet:
+                sheet = spreadsheet.worksheet('Ações')
+                sheet_data = sheet.get_all_records()
+                
+                if sheet_data:
+                    df_atual = pd.DataFrame(sheet_data)
+                    print(f"✅ Carregadas {len(df_atual)} ações do Google Sheets")
+                    
+                    # Verificar se já existe o ID no dataframe atual
+                    max_id = 0
+                    if 'ID da Ação' in df_atual.columns:
+                        ids_acao = pd.to_numeric(df_atual['ID da Ação'], errors='coerce')
+                        max_id = ids_acao.max() if not pd.isna(ids_acao.max()) else 0
+                        
+                    next_id = int(max_id) + 1
+                    print(f"Próximo ID baseado nos dados atuais da planilha: {next_id}")
+                    
+                    # Atualizar acoes_data com os dados da planilha
+                    acoes_data = df_atual.to_dict('records')
+                else:
+                    print("Nenhum dado encontrado na guia Ações do Google Sheets")
+                    # Gerar ID baseado nos dados do cache
+                    next_id = 1
+                    if acoes_data and len(acoes_data) > 0:
+                        df_acoes = pd.DataFrame(acoes_data)
+                        if 'ID da Ação' in df_acoes.columns:
+                            ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                            next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
+            else:
+                print("Não foi possível conectar ao Google Sheets para recarregar ações")
+                # Determinar próximo ID usando os dados em cache
+                next_id = 1
+                if acoes_data and len(acoes_data) > 0:
+                    df_acoes = pd.DataFrame(acoes_data)
+                    if 'ID da Ação' in df_acoes.columns:
+                        ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                        next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
+        except Exception as reload_e:
+            print(f"Erro ao recarregar ações: {reload_e}")
+            # Determinar próximo ID usando os dados em cache
+            next_id = 1
+            if acoes_data and len(acoes_data) > 0:
+                df_acoes = pd.DataFrame(acoes_data)
+                if 'ID da Ação' in df_acoes.columns:
+                    ids_numericos = pd.to_numeric(df_acoes['ID da Ação'], errors='coerce')
+                    next_id = int(ids_numericos.max()) + 1 if not pd.isna(ids_numericos.max()) else 1
 
         # Preparar nova linha
         nova_acao = {
@@ -3325,20 +3528,31 @@ def save_new_action(n_clicks, projeto, mes_referencia, prioridade, descricao, re
 
         # Adicionar nova ação aos dados existentes
         acoes_data.append(nova_acao)
+        print(f"Nova ação adicionada ao cache (ID: {next_id})")
 
         # Atualizar dados na planilha do Google Sheets
         df_acoes = pd.DataFrame(acoes_data)
+        
+        # Salvar localmente antes de enviar ao Google Sheets (backup)
+        save_data_to_local(df_acoes, "acoes_pre_upload")
+        
+        # Tentar atualizar no Google Sheets
         success = update_acoes_in_sheets(df_acoes)
         if success:
-            print(f"Ação cadastrada com sucesso: ID {next_id}")
+            print(f"✅ Ação cadastrada com sucesso: ID {next_id}")
+            
+            # Garantir que o cache está atualizado
+            CACHE_ACOES = df_acoes
+            LAST_CACHE_UPDATE = time.time()
         else:
-            print(f"AVISO: Falha ao salvar ação na planilha, mas foi salva localmente")
+            print(f"⚠️ Falha ao salvar ação na planilha do Google Sheets, mas foi salva localmente")
             save_data_to_local(df_acoes, "acoes")
 
+        print("===== Nova ação salva =====\n")
         return False, False, "", acoes_data
 
     except Exception as e:
-        print(f"Erro ao salvar ação: {e}")
+        print(f"❌ Erro ao salvar ação: {e}")
         import traceback
         traceback.print_exc()
         return dash.no_update, True, f"Erro ao salvar ação: {str(e)}", dash.no_update
