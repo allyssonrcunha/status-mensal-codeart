@@ -869,6 +869,22 @@ print("Processando dados de ações...")
 df_acoes_initial = process_acoes(df_acoes_initial)
 print("Dados carregados com sucesso!")
 
+# Verificar se há colunas duplicadas nos DataFrames
+if not df_projetos_initial.empty and len(df_projetos_initial.columns) != len(set(df_projetos_initial.columns)):
+    print(f"AVISO: DataFrame de projetos tem colunas duplicadas. Corrigindo...")
+    # Identificar e corrigir colunas duplicadas
+    df_projetos_initial = df_projetos_initial.loc[:, ~df_projetos_initial.columns.duplicated()]
+    
+if not df_codenautas_initial.empty and len(df_codenautas_initial.columns) != len(set(df_codenautas_initial.columns)):
+    print(f"AVISO: DataFrame de codenautas tem colunas duplicadas. Corrigindo...")
+    # Identificar e corrigir colunas duplicadas
+    df_codenautas_initial = df_codenautas_initial.loc[:, ~df_codenautas_initial.columns.duplicated()]
+    
+if not df_acoes_initial.empty and len(df_acoes_initial.columns) != len(set(df_acoes_initial.columns)):
+    print(f"AVISO: DataFrame de ações tem colunas duplicadas. Corrigindo...")
+    # Identificar e corrigir colunas duplicadas
+    df_acoes_initial = df_acoes_initial.loc[:, ~df_acoes_initial.columns.duplicated()]
+
 # Obter listas para os filtros iniciais
 def get_filter_options(df):
     if df.empty:
@@ -2987,7 +3003,7 @@ if __name__ == '__main__':
         # Em desenvolvimento local, usamos o servidor integrado do Dash
         import os
         debug = os.environ.get('ENV', 'development') == 'development'
-        port = int(os.environ.get('PORT', 8050))
+        port = int(os.environ.get('PORT', 10000))  # Alterado para 10000 por padrão
         
         print(f"\nIniciando servidor Dash {'em modo debug' if debug else 'em produção'} na porta {port}")
         app.run(debug=debug, host='0.0.0.0', port=port)
