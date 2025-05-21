@@ -1,0 +1,20 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Environments
+.env
+venv/
+ENV/
+
+# Credentials
+*.json
+credentials/
+
+# Local backups
+*_backup.csv
+
+# IDE
+.vscode/
+.idea/ 
