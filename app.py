@@ -250,8 +250,11 @@ def load_codenautas_from_sheets():
 def load_acoes_from_sheets():
     global CACHE_ACOES, LAST_CACHE_UPDATE
 
-    # Verificar se existe cache válido
-    if CACHE_ACOES is not None and LAST_CACHE_UPDATE is not None:
+    # Forçar atualização a partir do Google Sheets (ignorar cache)
+    force_update = True
+    
+    # Verificar se existe cache válido (só usar se não for forçar atualização)
+    if not force_update and CACHE_ACOES is not None and LAST_CACHE_UPDATE is not None:
         elapsed_time = time.time() - LAST_CACHE_UPDATE
         if elapsed_time < CACHE_DURATION:
             print(
@@ -259,13 +262,13 @@ def load_acoes_from_sheets():
             return CACHE_ACOES
 
     try:
-        print("Carregando dados da aba Ações...")
+        print("Carregando dados da aba Ações diretamente do Google Sheets...")
 
         def fetch_data():
             spreadsheet = connect_google_sheets()
             if not spreadsheet:
                 print(
-                    "Aviso: Usando DataFrame vazio para Ações devido a falha na conexão com Google Sheets.")
+                    "Aviso: Não foi possível conectar ao Google Sheets para obter ações.")
                 return pd.DataFrame()
 
             # Carregar aba Ações
@@ -273,10 +276,13 @@ def load_acoes_from_sheets():
             data = sheet.get_all_records()
 
             if not data:
-                print("Aviso: Planilha Ações está vazia.")
+                print("Aviso: Planilha Ações está vazia no Google Sheets.")
                 return pd.DataFrame()
 
             df_acoes = pd.DataFrame(data)
+            
+            # Verificar e imprimir as colunas para debug
+            print(f"Colunas encontradas na guia Ações: {df_acoes.columns.tolist()}")
 
             # Converter colunas de data para datetime
             date_cols = ['Data de Cadastro',
@@ -287,37 +293,43 @@ def load_acoes_from_sheets():
                         df_acoes[col], errors='coerce')
 
             print(
-                f"✅ Dados carregados com sucesso: {len(df_acoes)} ações encontradas.")
+                f"✅ Dados carregados com sucesso do Google Sheets: {len(df_acoes)} ações encontradas.")
             return df_acoes
 
         # Usar retry com backoff exponencial
         df_acoes = retry_with_backoff(fetch_data)
 
-        # Se o dataframe estiver vazio, tentar carregar do backup local
+        # Se o dataframe ainda estiver vazio após tentar carregar do Google Sheets, 
+        # só então tentar carregar do backup local
         if df_acoes.empty:
-            print("Tentando carregar ações do backup local...")
+            print("Nenhuma ação encontrada no Google Sheets, tentando carregar do backup local...")
             df_local = load_data_from_local("acoes")
             if df_local is not None and not df_local.empty:
                 df_acoes = df_local
                 print(f"Carregadas {len(df_acoes)} ações do backup local.")
 
-        # Atualizar cache
-        CACHE_ACOES = df_acoes
-        LAST_CACHE_UPDATE = time.time()
-
-        # Salvar cópia local para backup
+        # Atualizar cache apenas se tivermos dados
         if not df_acoes.empty:
+            CACHE_ACOES = df_acoes
+            LAST_CACHE_UPDATE = time.time()
+
+            # Salvar cópia local para backup
             save_data_to_local(df_acoes, "acoes")
+            print(f"Backup local de ações atualizado com {len(df_acoes)} registros.")
 
         return df_acoes
 
     except Exception as e:
-        print(f"Erro ao carregar dados de Ações: {e}")
+        print(f"Erro ao carregar dados de Ações do Google Sheets: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        # Tentar usar cache existente
         if CACHE_ACOES is not None:
             print("Usando dados em cache de Ações devido a erro na atualização")
             return CACHE_ACOES
 
-        # Tentar carregar do backup local
+        # Tentar carregar do backup local como última opção
         print("Tentando carregar ações do backup local após erro...")
         df_local = load_data_from_local("acoes")
         if df_local is not None:
@@ -1756,8 +1768,12 @@ def refresh_data(n_clicks):
     global CACHE_PROJETOS, CACHE_CODENAUTAS, CACHE_ACOES, LAST_CACHE_UPDATE
 
     if n_clicks:
-        # Forçar atualização definindo o último cache como muito antigo
+        print("\n===== Atualizando todos os dados do Google Sheets =====")
+        # Forçar atualização invalidando completamente o cache
         LAST_CACHE_UPDATE = 0
+        CACHE_PROJETOS = None
+        CACHE_CODENAUTAS = None
+        CACHE_ACOES = None  # Garantir que o cache de ações seja limpo
 
         # Recarregar dados do Google Sheets
         df_projetos_refreshed = load_data_from_sheets()
@@ -1766,11 +1782,13 @@ def refresh_data(n_clicks):
         # Salvar cópia local
         if not df_projetos_refreshed.empty:
             save_data_to_local(df_projetos_refreshed, "projetos")
-        elif CACHE_PROJETOS is None:
-            # Tentar carregar do backup local
+        else:
+            # Tentar carregar do backup local apenas se não conseguir dados do Google Sheets
+            print("Alerta: Não foi possível obter dados de projetos do Google Sheets")
             df_local = load_data_from_local("projetos")
             if df_local is not None:
                 df_projetos_refreshed = process_data(df_local)
+                print(f"Usando backup local com {len(df_projetos_refreshed)} projetos")
 
         # Recarregar dados dos codenautas
         df_codenautas_refreshed = load_codenautas_from_sheets()
@@ -1778,25 +1796,67 @@ def refresh_data(n_clicks):
         # Salvar cópia local
         if not df_codenautas_refreshed.empty:
             save_data_to_local(df_codenautas_refreshed, "codenautas")
-        elif CACHE_CODENAUTAS is None:
-            # Tentar carregar do backup local
+        else:
+            # Tentar carregar do backup local apenas se não conseguir dados do Google Sheets
+            print("Alerta: Não foi possível obter dados de codenautas do Google Sheets")
             df_local = load_data_from_local("codenautas")
             if df_local is not None:
                 df_codenautas_refreshed = df_local
+                print(f"Usando backup local com {len(df_codenautas_refreshed)} codenautas")
 
-        # Recarregar dados das ações
-        df_acoes_refreshed = load_acoes_from_sheets()
-        df_acoes_refreshed = process_acoes(df_acoes_refreshed)
-
-        # Salvar cópia local
-        if not df_acoes_refreshed.empty:
-            save_data_to_local(df_acoes_refreshed, "acoes")
-        elif CACHE_ACOES is None:
-            # Tentar carregar do backup local
+        # Recarregar dados das ações diretamente do Google Sheets
+        print("Carregando dados de ações diretamente do Google Sheets...")
+        try:
+            spreadsheet = connect_google_sheets()
+            if spreadsheet:
+                sheet = spreadsheet.worksheet('Ações')
+                data = sheet.get_all_records()
+                
+                if data:
+                    df_acoes_refreshed = pd.DataFrame(data)
+                    print(f"✅ Carregados {len(df_acoes_refreshed)} registros da guia Ações do Google Sheets")
+                    print(f"Colunas encontradas: {df_acoes_refreshed.columns.tolist()}")
+                    
+                    # Converter colunas de data para datetime
+                    date_cols = ['Data de Cadastro', 'Data Limite', 'Data de Conclusão']
+                    for col in date_cols:
+                        if col in df_acoes_refreshed.columns:
+                            df_acoes_refreshed[col] = pd.to_datetime(df_acoes_refreshed[col], errors='coerce')
+                            print(f"Coluna {col} convertida para datetime")
+                    
+                    # Processar dados
+                    df_acoes_refreshed = process_acoes(df_acoes_refreshed)
+                    
+                    # Atualizar cache e salvar backup
+                    CACHE_ACOES = df_acoes_refreshed
+                    LAST_CACHE_UPDATE = time.time()
+                    save_data_to_local(df_acoes_refreshed, "acoes")
+                    print(f"Cache e backup de ações atualizados com {len(df_acoes_refreshed)} registros")
+                else:
+                    print("A guia Ações está vazia no Google Sheets")
+                    df_acoes_refreshed = pd.DataFrame()
+            else:
+                print("Não foi possível conectar ao Google Sheets para obter ações")
+                df_acoes_refreshed = pd.DataFrame()
+        except Exception as e:
+            print(f"Erro ao carregar ações diretamente: {e}")
+            import traceback
+            traceback.print_exc()
+            df_acoes_refreshed = pd.DataFrame()
+            
+        # Se não conseguiu dados do Google Sheets, tentar o backup local
+        if df_acoes_refreshed.empty:
             df_local = load_data_from_local("acoes")
-            if df_local is not None:
+            if df_local is not None and not df_local.empty:
                 df_acoes_refreshed = process_acoes(df_local)
+                print(f"Usando backup local com {len(df_acoes_refreshed)} ações")
+            else:
+                # Último recurso: chamar a função original
+                print("Tentando método alternativo para carregar ações...")
+                df_acoes_refreshed = load_acoes_from_sheets()
+                df_acoes_refreshed = process_acoes(df_acoes_refreshed)
 
+        print("===== Atualização de dados concluída =====\n")
         return df_projetos_refreshed.to_dict('records'), df_codenautas_refreshed.to_dict('records'), df_acoes_refreshed.to_dict('records')
 
     # Se não houver clique, retornar os dados atuais
