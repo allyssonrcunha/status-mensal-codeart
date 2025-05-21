@@ -89,7 +89,7 @@ def connect_google_sheets():
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
         
         # Caminho para o arquivo de credenciais
-        credentials_path = 'credentials/google-credentials.json'
+        credentials_path = 'google_credentials.json'
         
         # Verificar se o arquivo de credenciais existe
         if not os.path.exists(credentials_path):
@@ -1538,7 +1538,7 @@ app.layout = html.Div(style=custom_style['body'], children=[
         dcc.Store(id="selected-project-store", data=None),
         
         # Componente invisível para evitar erro de callback
-        html.Div(dcc.Graph(id="segmento-chart"), style={'display': 'none'})
+        html.Div(dcc.Graph(id="segmento-chart-hidden"), style={'display': 'none'})
     ], fluid=True)
 ])
 
